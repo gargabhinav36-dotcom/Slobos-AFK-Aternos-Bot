@@ -1645,7 +1645,7 @@ function scheduleReconnect() {
   }
 
   addLog("[Modules] All modules initialized!");
-}
+
 
 // ============================================================
 // MOVEMENT HELPERS
