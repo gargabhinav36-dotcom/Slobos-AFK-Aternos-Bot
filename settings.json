@@ -1,5 +1,6 @@
 {
   "name": "AFK Bot",
+
   "bot-account": {
     "username": "AFK_Bot_123",
     "password": "",
@@ -32,8 +33,8 @@
     },
 
     "chat-messages": {
-      "enabled": true,
-      "repeat": true,
+      "enabled": false,
+      "repeat": false,
       "repeat-delay": 120,
       "messages": [
         "I'm a regular player",
@@ -44,22 +45,25 @@
 
     "chat-log": true,
 
-    "auto-reconnect": true,
+    "auto-reconnect": false,
     "auto-reconnect-delay": 15000,
     "max-reconnect-delay": 120000
   },
 
   "movement": {
     "enabled": false,
+
     "circle-walk": {
       "enabled": false,
       "radius": 4,
       "speed": 3000
     },
+
     "look-around": {
       "enabled": false,
       "interval": 5000
     },
+
     "random-jump": {
       "enabled": false,
       "interval": 10000
@@ -70,7 +74,7 @@
     "avoidMobs": true,
     "combat": false,
     "beds": false,
-    "chat": true,
+    "chat": false,
     "console-commands": true
   },
 
@@ -87,6 +91,7 @@
   "discord": {
     "enabled": false,
     "webhookUrl": "",
+
     "events": {
       "connect": true,
       "disconnect": true,
@@ -95,6 +100,6 @@
   },
 
   "chat": {
-    "respond": true
+    "respond": false
   }
 }
