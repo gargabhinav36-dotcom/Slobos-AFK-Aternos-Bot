@@ -1127,32 +1127,40 @@ setInterval(
 // ============================================================
 // BOT CREATION WITH RECONNECTION LOGIC
 // ============================================================
+
 // ============================================================
 // RECONNECTION & TIMEOUT MANAGEMENT
 // ============================================================
+
 let bot = null;
 let activeIntervals = [];
 let reconnectTimeoutId = null;
 let connectionTimeoutId = null;
 let isReconnecting = false;
 
+// Discord webhook rate limit
+let lastDiscordSend = 0;
+const DISCORD_RATE_LIMIT_MS = 5000;
+
+// ============================================================
+// TIMEOUT + INTERVAL HELPERS
+// ============================================================
+
 function clearBotTimeouts() {
   if (reconnectTimeoutId) {
     clearTimeout(reconnectTimeoutId);
     reconnectTimeoutId = null;
   }
+
   if (connectionTimeoutId) {
     clearTimeout(connectionTimeoutId);
     connectionTimeoutId = null;
   }
 }
 
-// FIX: Discord rate limiting - track last send time
-let lastDiscordSend = 0;
-const DISCORD_RATE_LIMIT_MS = 5000; // min 5s between webhook calls
-
 function clearAllIntervals() {
   addLog(`[Cleanup] Clearing ${activeIntervals.length} intervals`);
+
   activeIntervals.forEach((id) => clearInterval(id));
   activeIntervals = [];
 }
@@ -1163,55 +1171,74 @@ function addInterval(callback, delay) {
   return id;
 }
 
+// ============================================================
+// RECONNECT DELAY
+// ============================================================
+
 function getReconnectDelay() {
   if (botState.wasThrottled) {
     botState.wasThrottled = false;
+
     const throttleDelay = 60000 + Math.floor(Math.random() * 60000);
+
     addLog(
-      `[Bot] Throttle detected - using extended delay: ${throttleDelay / 1000}s`,
+      `[Bot] Throttle detected - reconnecting in ${Math.floor(
+        throttleDelay / 1000,
+      )}s`,
     );
+
     return throttleDelay;
   }
 
-  // FIX: read auto-reconnect-delay from settings as base delay
   const baseDelay = config.utils["auto-reconnect-delay"] || 3000;
   const maxDelay = config.utils["max-reconnect-delay"] || 30000;
+
   const delay = Math.min(
     baseDelay * Math.pow(2, botState.reconnectAttempts),
     maxDelay,
   );
+
   const jitter = Math.floor(Math.random() * 2000);
+
   return delay + jitter;
 }
 
+// ============================================================
+// CREATE BOT
+// ============================================================
+
 function createBot() {
   if (isReconnecting) {
-    addLog("[Bot] Already reconnecting, skipping...");
+    addLog("[Bot] Already reconnecting...");
     return;
   }
 
-  // Cleanup previous bot properly to avoid ghost bots
+  // Cleanup old bot
   if (bot) {
     clearAllIntervals();
+
     try {
       bot.removeAllListeners();
       bot.end();
     } catch (e) {
-      addLog("[Cleanup] Error ending previous bot:", e.message);
+      addLog("[Cleanup] Error:", e.message);
     }
+
     bot = null;
   }
 
-  addLog(`[Bot] Creating bot instance...`);
-  addLog(`[Bot] Connecting to ${config.server.ip}:${config.server.port}`);
+  addLog("[Bot] Creating new bot...");
+  addLog(
+    `[Bot] Connecting to ${config.server.ip}:${config.server.port}`,
+  );
 
   try {
-    // FIX: use version:false to auto-detect server version so the bot can join any server.
-    // If the user explicitly sets a version in settings.json it is still respected.
     const botVersion =
-      config.server.version && config.server.version.trim() !== ""
+      config.server.version &&
+      config.server.version.trim() !== ""
         ? config.server.version
         : false;
+
     bot = mineflayer.createBot({
       username: config["bot-account"].username,
       password: config["bot-account"].password || undefined,
@@ -1225,23 +1252,31 @@ function createBot() {
 
     bot.loadPlugin(pathfinder);
 
-    // FIX: connection timeout - end the old bot before reconnecting to avoid ghost bots
+    // ============================================================
+    // CONNECTION TIMEOUT
+    // ============================================================
+
     clearBotTimeouts();
+
     connectionTimeoutId = setTimeout(() => {
       if (!botState.connected) {
-        addLog("[Bot] Connection timeout - no spawn received");
+        addLog("[Bot] Connection timeout");
+
         try {
           bot.removeAllListeners();
           bot.end();
-        } catch (e) {
-          /* ignore */
-        }
+        } catch (e) {}
+
         bot = null;
+
         scheduleReconnect();
       }
-    }, 150000); // 150s - Aternos servers can take 90-120s to finish spawning a player
+    }, 150000);
 
-    // FIX: guard against spawn firing twice (can happen on some servers)
+    // ============================================================
+    // SPAWN EVENT
+    // ============================================================
+
     let spawnHandled = false;
 
     bot.once("spawn", () => {
@@ -1249,96 +1284,135 @@ function createBot() {
       spawnHandled = true;
 
       clearBotTimeouts();
+
       botState.connected = true;
       botState.lastActivity = Date.now();
       botState.reconnectAttempts = 0;
+
       isReconnecting = false;
 
       addLog(
-        `[Bot] [+] Successfully spawned on server! (Version: ${bot.version})`,
+        `[Bot] Successfully joined server! (${bot.version})`,
       );
+
+      // Discord connect log
       if (
         config.discord &&
         config.discord.events &&
         config.discord.events.connect
       ) {
         sendDiscordWebhook(
-          `[+] **Connected** to \`${config.server.ip}\``,
+          `[+] Connected to ${config.server.ip}`,
           0x4ade80,
         );
       }
 
-      // FIX: use bot.version (auto-detected) instead of config value so minecraft-data always matches
+      // ============================================================
+      // MOVEMENTS
+      // ============================================================
+
       const mcData = require("minecraft-data")(bot.version);
+
       const defaultMove = new Movements(bot, mcData);
+
       defaultMove.allowFreeMotion = false;
       defaultMove.canDig = false;
       defaultMove.liquidCost = 1000;
       defaultMove.fallDamageCost = 1000;
 
+      // ============================================================
+      // INITIALIZE MODULES
+      // ============================================================
+
       initializeModules(bot, mcData, defaultMove);
 
-      // Attempt creative mode (only works if bot has OP and enabled in settings)
+      // ============================================================
+      // TRY CREATIVE
+      // ============================================================
+
       setTimeout(() => {
-        if (bot && botState.connected && config.server["try-creative"]) {
+        if (
+          bot &&
+          botState.connected &&
+          config.server["try-creative"]
+        ) {
           bot.chat("/gamemode creative");
-          addLog("[INFO] Attempted to set creative mode (requires OP)");
+
+          addLog("[INFO] Tried enabling creative mode");
         }
       }, 3000);
 
       bot.on("messagestr", (message) => {
         if (
-          message.includes("commands.gamemode.success.self") ||
-          message.includes("Set own game mode to Creative Mode")
+          message.includes("Creative Mode") ||
+          message.includes("commands.gamemode.success.self")
         ) {
-          addLog("[INFO] Bot is now in Creative Mode.");
+          addLog("[INFO] Creative mode enabled");
         }
       });
     });
 
-    // FIX: 'kicked' fires before 'end'. Remove the scheduleReconnect from 'kicked'
-    // so that 'end' is the single source of reconnect truth, preventing double-trigger.
+    // ============================================================
+    // KICK EVENT
+    // ============================================================
+
     bot.on("kicked", (reason) => {
-      // FIX: stringify reason if it's an object to make it readable in logs
       const kickReason =
-        typeof reason === "object" ? JSON.stringify(reason) : reason;
+        typeof reason === "object"
+          ? JSON.stringify(reason)
+          : reason;
+
       addLog(`[Bot] Kicked: ${kickReason}`);
+
       botState.connected = false;
+
       botState.errors.push({
         type: "kicked",
         reason: kickReason,
         time: Date.now(),
       });
+
       clearAllIntervals();
 
       const reasonStr = String(kickReason).toLowerCase();
+
       if (
         reasonStr.includes("throttl") ||
-        reasonStr.includes("wait before reconnect") ||
-        reasonStr.includes("too fast")
+        reasonStr.includes("too fast") ||
+        reasonStr.includes("wait before reconnect")
       ) {
-        addLog(
-          "[Bot] Throttle kick detected - will use extended reconnect delay",
-        );
         botState.wasThrottled = true;
+
+        addLog("[Bot] Throttle detected");
       }
 
+      // Discord disconnect
       if (
         config.discord &&
         config.discord.events &&
         config.discord.events.disconnect
       ) {
-        sendDiscordWebhook(`[!] **Kicked**: ${kickReason}`, 0xff0000);
+        sendDiscordWebhook(
+          `[!] Kicked: ${kickReason}`,
+          0xff0000,
+        );
       }
-      // NOTE: do NOT call scheduleReconnect() here - 'end' will fire right after 'kicked' and handle it
     });
 
-    // FIX: 'end' is the single reconnect trigger
+    // ============================================================
+    // END EVENT
+    // ============================================================
+
     bot.on("end", (reason) => {
-      addLog(`[Bot] Disconnected: ${reason || "Unknown reason"}`);
+      addLog(
+        `[Bot] Disconnected: ${reason || "Unknown reason"}`,
+      );
+
       botState.connected = false;
+
       clearAllIntervals();
-      spawnHandled = false; // reset for next connection
+
+      spawnHandled = false;
 
       if (
         config.discord &&
@@ -1346,125 +1420,69 @@ function createBot() {
         config.discord.events.disconnect
       ) {
         sendDiscordWebhook(
-          `[-] **Disconnected**: ${reason || "Unknown"}`,
+          `[-] Disconnected: ${reason || "Unknown"}`,
           0xf87171,
         );
       }
 
-      // ALWAYS reconnect — bot must never leave the server
+      // Always reconnect
       scheduleReconnect();
     });
 
+    // ============================================================
+    // ERROR EVENT
+    // ============================================================
+
     bot.on("error", (err) => {
-      const msg = err.message || "";
+      const msg = err.message || "Unknown";
+
       addLog(`[Bot] Error: ${msg}`);
-      botState.errors.push({ type: "error", message: msg, time: Date.now() });
-      // Don't reconnect on error - let 'end' event handle it
+
+      botState.errors.push({
+        type: "error",
+        message: msg,
+        time: Date.now(),
+      });
     });
   } catch (err) {
-    addLog(`[Bot] Failed to create bot: ${err.message}`);
+    addLog(`[Bot] Failed creating bot: ${err.message}`);
+
     scheduleReconnect();
   }
 }
 
+// ============================================================
+// RECONNECT HANDLER
+// ============================================================
+
 function scheduleReconnect() {
   clearBotTimeouts();
 
-  // FIX: don't stack reconnect if already waiting
   if (isReconnecting) {
-    addLog("[Bot] Reconnect already scheduled, skipping duplicate.");
+    addLog("[Bot] Reconnect already scheduled");
     return;
   }
 
   isReconnecting = true;
+
   botState.reconnectAttempts++;
 
   const delay = getReconnectDelay();
+
   addLog(
-    `[Bot] Reconnecting in ${delay / 1000}s (attempt #${botState.reconnectAttempts})`,
+    `[Bot] Reconnecting in ${Math.floor(
+      delay / 1000,
+    )}s (Attempt #${botState.reconnectAttempts})`,
   );
 
   reconnectTimeoutId = setTimeout(() => {
     reconnectTimeoutId = null;
+
     isReconnecting = false;
+
     createBot();
   }, delay);
 }
-
-// ============================================================
-// MODULE INITIALIZATION
-// ============================================================
-function initializeModules(bot, mcData, defaultMove) {
-  addLog("[Modules] Initializing all modules...");
-
-  // ---------- AUTO AUTH (REACTIVE) ----------
-  if (config.utils["auto-auth"] && config.utils["auto-auth"].enabled) {
-    const password = config.utils["auto-auth"].password;
-    let authHandled = false;
-
-    const tryAuth = (type) => {
-      if (authHandled || !bot || !botState.connected) return;
-      authHandled = true;
-      if (type === "register") {
-        bot.chat(`/register ${password} ${password}`);
-        addLog("[Auth] Detected register prompt - sent /register");
-      } else {
-        bot.chat(`/login ${password}`);
-        addLog("[Auth] Detected login prompt - sent /login");
-      }
-    };
-
-    bot.on("messagestr", (message) => {
-      if (authHandled) return;
-      const msg = message.toLowerCase();
-      if (
-        msg.includes("/register") ||
-        msg.includes("register ") ||
-        msg.includes("지정된 비밀번호")
-      ) {
-        tryAuth("register");
-      } else if (
-        msg.includes("/login") ||
-        msg.includes("login ") ||
-        msg.includes("로그인")
-      ) {
-        tryAuth("login");
-      }
-    });
-
-    // Failsafe: if no prompt after 10s, try login anyway
-    setTimeout(() => {
-      if (!authHandled && bot && botState.connected) {
-        addLog(
-          "[Auth] No prompt detected after 10s, sending /login as failsafe",
-        );
-        bot.chat(`/login ${password}`);
-        authHandled = true;
-      }
-    }, 10000);
-  }
-
-  // ---------- CHAT MESSAGES ----------
-  if (config.utils["chat-messages"] && config.utils["chat-messages"].enabled) {
-    const messages = config.utils["chat-messages"].messages;
-    if (config.utils["chat-messages"].repeat) {
-      let i = 0;
-      addInterval(() => {
-        if (bot && botState.connected) {
-          bot.chat(messages[i]);
-          botState.lastActivity = Date.now();
-          i = (i + 1) % messages.length;
-        }
-      }, config.utils["chat-messages"]["repeat-delay"] * 1000);
-    } else {
-      messages.forEach((msg, idx) => {
-        setTimeout(() => {
-          if (bot && botState.connected) bot.chat(msg);
-        }, idx * 1000);
-      });
-    }
-  }
-
   // ---------- MOVE TO POSITION ----------
   // FIX: only use position goal if circle-walk is NOT enabled (they fight over pathfinder)
   if (
