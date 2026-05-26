@@ -10,7 +10,7 @@
   "server": {
     "ip": "us.freegamehost.xyz",
     "port": 26286,
-    "version": "1.21.11",
+    "version": false,
     "try-creative": false
   },
 
@@ -41,7 +41,7 @@
 
     "chat-log": false,
 
-    "auto-reconnect": false,
+    "auto-reconnect": true,
     "auto-reconnect-delay": 15000,
     "max-reconnect-delay": 120000
   },
