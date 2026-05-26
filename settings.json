@@ -2,7 +2,7 @@
   "name": "AFK Bot",
 
   "bot-account": {
-    "username": "AFK_Bot_123",
+    "username": "Tecnoblade",
     "password": "",
     "type": "offline"
   },
@@ -23,8 +23,8 @@
 
   "utils": {
     "auto-auth": {
-      "enabled": true,
-      "password": "chalol78"
+      "enabled": false,
+      "password": ""
     },
 
     "anti-afk": {
