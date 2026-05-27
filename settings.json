@@ -2,7 +2,7 @@
   "name": "AFK Bot",
 
   "bot-account": {
-    "username": "imnotormaybeagoone0-0-0-",
+    "username": "AFKBot01",
     "password": "",
     "type": "offline"
   },
@@ -10,7 +10,7 @@
   "server": {
     "ip": "us.freegamehost.xyz",
     "port": 26286,
-    "version": false,
+    "version": "1.21.1",
     "try-creative": false
   },
 
